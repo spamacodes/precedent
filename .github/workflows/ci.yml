@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply schema to Postgres
+        run: psql -v ON_ERROR_STOP=1 -f data/schema.sql
+
+      - name: Check all tables exist
+        run: |
+          count=$(psql -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('nation','issue_category','referral','referral_nation','response','response_issue')")
+          echo "tables found: $count"
+          test "$count" -eq 6
+
+      - name: Check response_type constraint rejects bad values
+        run: |
+          psql -v ON_ERROR_STOP=1 -c "INSERT INTO nation(name, region) VALUES ('Test Nation','North'); INSERT INTO referral(permit_type, project_name, region, sent_date) VALUES ('Notice of Work','Test','North','2026-01-01');"
+          if psql -v ON_ERROR_STOP=1 -c "INSERT INTO response(referral_id, nation_id, response_type) VALUES (1, 1, 'NOT_A_TYPE');"; then
+            echo "constraint did not reject an invalid response_type"
+            exit 1
+          fi
+          echo "invalid response_type rejected as expected"
